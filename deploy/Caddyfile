@@ -3,7 +3,6 @@
 {$PUBLIC_HOST} {
 	reverse_proxy app:3000
 
-	# Optional: protect the demo endpoints with basic auth for the interview.
 	# Generate the hash with:  docker run --rm caddy:2-alpine caddy hash-password --plaintext 'yourpass'
 	# Keep /webhooks/* and /qbo/* open: Intuit calls them (webhooks are HMAC-verified).
 	#
