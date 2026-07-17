@@ -1,8 +1,5 @@
 # Production-ish stack for the demo VM: app + Postgres + Caddy (automatic
 # HTTPS via Let's Encrypt against a sslip.io hostname, no DNS setup needed).
-#
-#   PUBLIC_HOST=<droplet-ip-with-dashes>.sslip.io \
-#   docker compose -f docker-compose.prod.yml up -d --build
 
 services:
   db:
@@ -24,7 +21,6 @@ services:
     build: .
     env_file: .env
     environment:
-      # Overrides .env: inside the compose network Postgres lives at db:5432.
       DATABASE_URL: postgres://sync:sync@db:5432/invoice_sync
       PORT: "3000"
     depends_on:
