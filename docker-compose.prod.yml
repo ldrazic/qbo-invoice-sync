@@ -1,0 +1,53 @@
+# Production-ish stack for the demo VM: app + Postgres + Caddy (automatic
+# HTTPS via Let's Encrypt against a sslip.io hostname, no DNS setup needed).
+#
+#   PUBLIC_HOST=<droplet-ip-with-dashes>.sslip.io \
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sync
+      POSTGRES_PASSWORD: sync
+      POSTGRES_DB: invoice_sync
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sync -d invoice_sync"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      # Overrides .env: inside the compose network Postgres lives at db:5432.
+      DATABASE_URL: postgres://sync:sync@db:5432/invoice_sync
+      PORT: "3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST, e.g. 137-184-10-20.sslip.io}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata_prod:
+  caddy_data:
+  caddy_config:
