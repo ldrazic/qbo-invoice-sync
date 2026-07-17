@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en" data-tab="console">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Invoice Sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --indigo: #322C96;        /* brand primary (hero, buttons) */
+  --indigo-deep: #1A174F;   /* darkest indigo */
+  --periwinkle: #818DF0;    /* secondary indigo */
+  --cyan: #10A6CC;          /* accent — the "AI Powered" eyebrow, logo "Lab" */
+  --cyan-ink: #0b7f9d;      /* cyan darkened for text on white */
+
+  --bg: #f4f5fb;            /* page — light lavender-tinted */
+  --panel: #ffffff;
+  --panel-2: #f7f8fd;
+  --line: #e5e6f2;
+  --line-soft: #eef0f9;
+  --ink: #131a33;           /* near slate-900 with indigo cast */
+  --ink-dim: #5a6480;
+  --ink-faint: #939cb6;
+
+  --internal: #4a40b8;      /* provenance: internal system (indigo) */
+  --internal-dim: #6a61cf;
+  --qbo: #1f9e16;           /* provenance: QuickBooks (its own green) */
+  --qbo-dim: #2CA01C;
+  --signal: #0e93b4;        /* sync / in-flight = brand cyan */
+  --amber: #b9770c;         /* semantic: partial payment */
+  --danger: #dc2b3f;
+  --ok: #1f9e16;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: "Manrope", -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --r: 14px;
+  --shadow: 0 1px 2px rgba(26,23,79,0.04), 0 8px 24px rgba(26,23,79,0.06);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background:
+    radial-gradient(var(--line) 1.1px, transparent 1.1px) 0 0 / 24px 24px,
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+button { font-family: inherit; cursor: pointer; }
+.mono { font-family: var(--mono); }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* ---------- top bar ---------- */
+header {
+  display: flex; align-items: center; gap: 18px 22px; flex-wrap: wrap;
+  padding: 13px 22px;
+  background: linear-gradient(100deg, var(--indigo) 0%, #3a32ab 60%, #453cc0 100%);
+  position: sticky; top: 0; z-index: 30;
+  box-shadow: 0 4px 20px rgba(26,23,79,0.18);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .logo {
+  font-weight: 800; letter-spacing: -0.02em; font-size: 17px; color: #fff;
+  display: inline-flex; align-items: center; gap: 9px;
+}
+.brand .logo .mark {
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
+  background: rgba(255,255,255,0.14); display: grid; place-items: center;
+  color: var(--cyan); font-size: 15px;
+}
+.brand .logo b { color: #fff; font-weight: 800; }
+.brand .logo i { color: var(--cyan); font-style: normal; font-weight: 800; }
+.brand .logo .sep { color: rgba(255,255,255,0.4); font-weight: 500; margin: 0 1px; }
+.brand .tag { font-size: 10.5px; color: rgba(255,255,255,0.6); letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; }
+
+.tabs { display: flex; gap: 4px; margin-left: 8px; background: rgba(255,255,255,0.1); padding: 3px; border-radius: 999px; }
+.tabs button {
+  background: transparent; border: none; color: rgba(255,255,255,0.75);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 6px 16px; border-radius: 999px; transition: all .15s;
+}
+.tabs button:hover { color: #fff; }
+html[data-tab="console"] .tabs button[data-go="console"],
+html[data-tab="schematic"] .tabs button[data-go="schematic"] {
+  color: var(--indigo); background: #fff;
+}
+.spacer { flex: 1; }
+
+.status-strip { display: flex; align-items: center; gap: 12px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11px; color: rgba(255,255,255,0.85);
+  padding: 6px 12px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.5); flex: none; }
+.dot.ok { background: #46e08a; box-shadow: 0 0 0 3px rgba(70,224,138,0.2); }
+.dot.off { background: #ff6b7a; box-shadow: 0 0 0 3px rgba(255,107,122,0.2); }
+.pill b { color: #fff; font-weight: 600; }
+
+/* ---------- layout ---------- */
+main { display: none; }
+html[data-tab="console"] #console { display: block; }
+html[data-tab="schematic"] #schematic { display: block; }
+
+.wrap { max-width: 1360px; margin: 0 auto; padding: 22px; }
+
+.console-grid {
+  display: grid;
+  grid-template-columns: 340px 1fr 380px;
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1180px) { .console-grid { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+}
+.panel > .phead {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 16px; border-bottom: 1px solid var(--line-soft);
+}
+.phead h2 { margin: 0; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-dim); font-weight: 700; }
+.phead .count { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+.pbody { padding: 16px; }
+
+/* ---------- form ---------- */
+label.field { display: block; margin-bottom: 13px; }
+label.field > span {
+  display: block; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+}
+input, select, textarea {
+  width: 100%; background: #fff; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+  font-family: var(--sans); font-size: 13.5px;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--periwinkle); box-shadow: 0 0 0 3px rgba(129,141,240,0.22); }
+.line-row { display: grid; grid-template-columns: 1fr 62px 92px 26px; gap: 7px; margin-bottom: 7px; align-items: center; }
+.line-row input { padding: 7px 9px; font-size: 12.5px; }
+.line-row .rm { background: transparent; border: 1px solid var(--line); color: var(--ink-faint); border-radius: 8px; height: 32px; }
+.line-row .rm:hover { border-color: var(--danger); color: var(--danger); }
+.addline { background: transparent; border: 1px dashed var(--line); color: var(--ink-dim); border-radius: 9px; padding: 9px; width: 100%; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+.addline:hover { border-color: var(--periwinkle); color: var(--internal); background: rgba(129,141,240,0.06); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 999px; padding: 10px 16px; font-size: 13px; font-weight: 600;
+  text-decoration: none; transition: all .15s;
+}
+.btn:hover { border-color: var(--periwinkle); box-shadow: 0 2px 8px rgba(50,44,150,0.1); }
+.btn.primary { background: var(--indigo); border-color: var(--indigo); color: #fff; font-weight: 700; }
+.btn.primary:hover { background: #3a32ab; box-shadow: 0 6px 18px rgba(50,44,150,0.28); }
+.btn.wide { width: 100%; }
+.btn.sm { padding: 7px 13px; font-size: 12px; }
+.btn.ghost { background: transparent; border-color: var(--line); }
+.btn.danger:hover { border-color: var(--danger); color: var(--danger); box-shadow: none; }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.total-preview { font-family: var(--mono); font-size: 14px; color: var(--ink-dim); margin: 6px 0 14px; }
+.total-preview b { color: var(--indigo); font-weight: 700; }
+
+/* ---------- invoice cards ---------- */
+.inv-list { display: flex; flex-direction: column; gap: 12px; }
+.inv {
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--panel);
+  overflow: hidden; box-shadow: var(--shadow);
+}
+.inv-top { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.inv-doc { font-family: var(--mono); font-size: 14px; font-weight: 700; letter-spacing: -0.01em; color: var(--indigo); }
+.inv-cust { color: var(--ink-dim); font-size: 13px; font-weight: 500; }
+.inv-amt { margin-left: auto; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+.badge {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid transparent;
+}
+.badge.open { color: var(--ink-dim); background: #eef0f7; }
+.badge.partial { color: var(--amber); background: rgba(185,119,12,0.12); }
+.badge.paid { color: var(--qbo); background: rgba(31,158,22,0.12); }
+.badge.voided, .badge.deleted { color: var(--danger); background: rgba(220,43,63,0.1); }
+.inv-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 0 16px 13px;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+}
+.inv-meta .tag-int b, .inv-meta .tag-qbo b { font-weight: 600; color: var(--ink-dim); }
+.inv-meta .tag-int::before { content: "internal"; color: var(--internal); margin-right: 6px; font-weight: 700; }
+.inv-meta .tag-qbo::before { content: "quickbooks"; color: var(--qbo); margin-right: 6px; font-weight: 700; }
+.inv-meta .unlinked { color: var(--signal); }
+.inv-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 16px; border-top: 1px solid var(--line-soft); background: var(--panel-2); }
+
+/* ---------- activity feed ---------- */
+.feed { display: flex; flex-direction: column; }
+.ev { display: flex; gap: 11px; padding: 11px 15px; border-bottom: 1px solid var(--line-soft); }
+.ev:last-child { border-bottom: none; }
+.ev .rail { display: flex; flex-direction: column; align-items: center; padding-top: 3px; }
+.ev .node { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--line); flex: none; }
+.ev .node.applied, .ev .node.linked_existing { border-color: var(--qbo); background: rgba(31,158,22,0.25); }
+.ev .node.conflict_lww { border-color: var(--amber); background: rgba(185,119,12,0.28); }
+.ev .node.recovered_orphan_write { border-color: var(--signal); }
+.ev .node.failed { border-color: var(--danger); background: rgba(220,43,63,0.22); }
+.ev .body { min-width: 0; }
+.ev .act { font-family: var(--mono); font-size: 12px; }
+.ev .act .a-applied, .ev .act .a-linked_existing { color: var(--qbo); }
+.ev .act .a-conflict_lww { color: var(--amber); }
+.ev .act .a-recovered_orphan_write { color: var(--signal); }
+.ev .act .a-failed { color: var(--danger); }
+.ev .act .a-skipped_echo, .ev .act .a-skipped_duplicate, .ev .act .a-skipped_noop, .ev .act .a-skipped_stale { color: var(--ink-faint); }
+.ev .det { font-size: 11.5px; color: var(--ink-dim); margin-top: 2px; word-break: break-word; }
+.ev .arrow { color: var(--ink-faint); }
+.ev .when { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-top: 3px; }
+
+/* ---------- links table ---------- */
+.links { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
+.links th { text-align: left; color: var(--ink-faint); font-weight: 500; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.links td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); color: var(--ink-dim); }
+.links tr:last-child td { border-bottom: none; }
+.links .id { color: var(--ink); }
+.links .etype-invoice { color: var(--internal); font-weight: 600; }
+.links .etype-payment { color: var(--qbo); font-weight: 600; }
+
+.empty { padding: 26px 15px; text-align: center; color: var(--ink-faint); font-family: var(--mono); font-size: 12px; }
+
+/* ---------- toast ---------- */
+#toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 60; }
+.toast {
+  background: #fff; border: 1px solid var(--line); border-left: 3px solid var(--indigo);
+  border-radius: 10px; padding: 11px 15px; font-size: 13px; max-width: 360px;
+  box-shadow: 0 12px 34px rgba(26,23,79,0.16); animation: slidein 0.22s ease;
+}
+.toast.ok { border-left-color: var(--qbo); }
+.toast.err { border-left-color: var(--danger); }
+.toast .t-title { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 3px; }
+@keyframes slidein { from { transform: translateX(20px); opacity: 0; } }
+
+/* ---------- connect banner ---------- */
+.connect-banner {
+  margin: 0 0 18px; padding: 15px 18px; border: 1px solid rgba(129,141,240,0.4);
+  background: linear-gradient(100deg, rgba(129,141,240,0.12), rgba(16,166,204,0.08));
+  border-radius: var(--r);
+  display: flex; align-items: center; gap: 14px;
+}
+.connect-banner .txt { font-size: 13.5px; color: var(--ink); }
+.connect-banner .txt b { color: var(--indigo); }
+
+/* =========================================================
+   SCHEMATIC
+   ========================================================= */
+.schem-hero {
+  margin: 22px 0 0; padding: 42px 40px 34px; border-radius: 20px;
+  background:
+    radial-gradient(circle at 90% 10%, rgba(129,141,240,0.35), transparent 45%),
+    radial-gradient(circle at 8% 90%, rgba(16,166,204,0.28), transparent 42%),
+    linear-gradient(120deg, var(--indigo-deep), var(--indigo) 70%);
+  color: #fff; position: relative; overflow: hidden;
+}
+.schem-hero .eyebrow { color: var(--cyan); }
+.schem-hero h1 { margin: 12px 0 10px; font-size: 32px; line-height: 1.12; letter-spacing: -0.025em; font-weight: 800; max-width: 24ch; color: #fff; }
+.schem-hero p { margin: 0; color: rgba(255,255,255,0.78); max-width: 62ch; font-size: 15.5px; }
+.schem-hero .legend { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 22px; }
+.schem-hero .legend span { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: rgba(255,255,255,0.85); letter-spacing: 0.04em; font-weight: 600; }
+.swatch { width: 11px; height: 11px; border-radius: 3px; }
+.swatch.int { background: var(--periwinkle); }
+.swatch.qbo { background: #43d13a; }
+.swatch.eng { background: var(--cyan); }
+
+.diagram-shell { display: grid; grid-template-columns: 1fr 400px; gap: 22px; margin-top: 26px; align-items: start; }
+@media (max-width: 1080px) { .diagram-shell { grid-template-columns: 1fr; } }
+
+.stage { position: relative; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 20px; box-shadow: var(--shadow); }
+.lane-labels { display: flex; justify-content: space-between; margin-bottom: 12px; }
+.lane-labels span { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; }
+.lane-labels .l-int { color: var(--internal); }
+.lane-labels .l-eng { color: var(--signal); }
+.lane-labels .l-qbo { color: var(--qbo); }
+
+.flow { display: flex; flex-direction: column; gap: 0; }
+.node-row { display: grid; grid-template-columns: 1fr; gap: 0; }
+.gnode {
+  position: relative; text-align: left;
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 12px; padding: 13px 15px; width: 100%;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.gnode:hover { border-color: var(--periwinkle); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(50,44,150,0.1); }
+.gnode.active { border-color: var(--signal); background: #f2fbfd; box-shadow: 0 0 0 3px rgba(16,166,204,0.16); }
+.gnode.int.active { border-color: var(--internal); background: #f4f3fc; box-shadow: 0 0 0 3px rgba(129,141,240,0.2); }
+.gnode.qbo.active { border-color: var(--qbo); background: #f2fbf1; box-shadow: 0 0 0 3px rgba(31,158,22,0.16); }
+.gnode .n-k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+.gnode.int .n-k { color: var(--internal); }
+.gnode.qbo .n-k { color: var(--qbo); }
+.gnode.eng .n-k { color: var(--signal); }
+.gnode .n-t { font-size: 14px; font-weight: 700; margin-top: 3px; }
+.gnode .n-d { font-size: 12px; color: var(--ink-dim); margin-top: 3px; }
+.connector { display: flex; justify-content: center; height: 26px; position: relative; }
+.connector::before { content: ""; width: 2px; background: var(--line); }
+.connector.flowing::before { background: linear-gradient(var(--signal), transparent); background-size: 100% 200%; animation: flow 1.1s linear infinite; }
+@keyframes flow { from { background-position: 0 -200%; } to { background-position: 0 200%; } }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
+
+/* detail panel */
+.detail { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); position: sticky; top: 84px; box-shadow: var(--shadow); overflow: hidden; }
+.detail .d-head { padding: 17px 18px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(120deg, rgba(50,44,150,0.05), rgba(16,166,204,0.05)); }
+.detail .d-k { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--signal); font-weight: 700; }
+.detail .d-t { font-size: 19px; font-weight: 800; margin-top: 5px; letter-spacing: -0.01em; }
+.detail .d-body { padding: 17px 18px; }
+.detail .d-body p { margin: 0 0 12px; font-size: 13.5px; color: var(--ink); line-height: 1.62; }
+.detail .d-body p.muted { color: var(--ink-dim); }
+.detail .d-sub { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); margin: 18px 0 8px; font-weight: 700; }
+.detail code { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line-soft); padding: 1px 5px; border-radius: 5px; color: var(--internal); }
+.qbo-map { border: 1px solid rgba(31,158,22,0.25); border-radius: 11px; padding: 12px 14px; background: rgba(31,158,22,0.05); }
+.qbo-map .qm-k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--qbo); margin-bottom: 6px; font-weight: 700; }
+.qbo-map p { margin: 0; font-size: 12.5px; color: var(--ink-dim); font-family: var(--mono); }
+
+/* decision cards */
+.decisions { margin-top: 40px; }
+.decisions h2 { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-dim); font-weight: 700; margin: 0 0 16px; }
+.dgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.dcard { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 17px 18px; box-shadow: var(--shadow); transition: transform .15s, box-shadow .15s; }
+.dcard:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(50,44,150,0.1); }
+.dcard .dc-k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cyan-ink); font-weight: 700; }
+.dcard h3 { font-size: 15px; margin: 6px 0 8px; font-weight: 800; letter-spacing: -0.01em; }
+.dcard p { margin: 0; font-size: 13px; color: var(--ink-dim); line-height: 1.55; }
+.dcard .tradeoff { margin-top: 10px; font-size: 12px; color: var(--amber); border-top: 1px solid var(--line-soft); padding-top: 9px; }
+.dcard .tradeoff b { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; }
+
+footer { max-width: 1360px; margin: 0 auto; padding: 30px 22px 50px; color: var(--ink-faint); font-family: var(--mono); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .connector.flowing::before { animation: none; }
+  .toast { animation: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo"><span class="mark">⇄</span><b>Invoice</b><i>Sync</i></span>
+    <span class="tag">internal ⇄ quickbooks</span>
+  </div>
+  <nav class="tabs">
+    <button data-go="console">Console</button>
+    <button data-go="schematic">Schematic</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="status-strip">
+    <span class="pill" id="qbo-pill"><span class="dot" id="qbo-dot"></span><span id="qbo-txt">checking…</span></span>
+    <span class="pill" id="health-pill"><span class="dot" id="health-dot"></span>service</span>
+  </div>
+</header>
+
+<!-- ============================ CONSOLE ============================ -->
+<main id="console">
+  <div class="wrap">
+    <div id="connect-slot"></div>
+    <div class="console-grid">
+
+      <!-- left: create -->
+      <section class="panel">
+        <div class="phead"><h2>New invoice</h2></div>
+        <div class="pbody">
+          <label class="field">
+            <span>Customer</span>
+            <select id="customer-select"></select>
+          </label>
+          <details style="margin:-4px 0 14px">
+            <summary class="eyebrow" style="cursor:pointer">+ new customer</summary>
+            <div style="display:flex; gap:7px; margin-top:9px">
+              <input id="new-cust-name" placeholder="Customer name" />
+              <button class="btn sm" id="add-cust">Add</button>
+            </div>
+          </details>
+
+          <label class="field"><span>Line items</span></label>
+          <div id="lines"></div>
+          <button class="addline" id="add-line">+ add line</button>
+
+          <label class="field" style="margin-top:14px">
+            <span>Note (optional)</span>
+            <input id="inv-note" placeholder="e.g. Q3 retainer" />
+          </label>
+
+          <div class="total-preview">Total <b id="total-preview">$0.00</b></div>
+          <button class="btn primary wide" id="create-inv">Create &amp; sync to QuickBooks</button>
+        </div>
+      </section>
+
+      <!-- center: invoices -->
+      <section class="panel" style="background:transparent; border:none">
+        <div class="phead" style="border:none; padding-left:2px">
+          <h2>Invoices</h2>
+          <span class="count" id="inv-count"></span>
+        </div>
+        <div id="inv-list" class="inv-list"></div>
+      </section>
+
+      <!-- right: activity + mapping -->
+      <div style="display:flex; flex-direction:column; gap:18px">
+        <section class="panel">
+          <div class="phead"><h2>Sync activity</h2><span class="count" id="feed-count"></span></div>
+          <div id="feed" class="feed"></div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Entity links</h2><span class="count eyebrow">internal ↔ qbo</span></div>
+          <div id="links-slot"></div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<!-- ============================ SCHEMATIC ============================ -->
+<main id="schematic">
+  <div class="wrap">
+    <div class="schem-hero">
+      <div class="eyebrow">System schematic</div>
+      <h1>Every event is refetched, reconciled, and written under an optimistic lock.</h1>
+      <p>Two systems, each with its own API and webhooks, kept in agreement without trusting a single payload. Click any stage to see what it does and how it maps onto the QuickBooks API.</p>
+      <div class="legend">
+        <span><i class="swatch int"></i> Internal system</span>
+        <span><i class="swatch eng"></i> Sync engine</span>
+        <span><i class="swatch qbo"></i> QuickBooks Online</span>
+      </div>
+    </div>
+
+    <div class="diagram-shell">
+      <div class="stage">
+        <div class="lane-labels"><span class="l-int">source</span><span class="l-eng">sync engine</span><span class="l-qbo">system of record</span></div>
+        <div class="flow" id="flow"></div>
+      </div>
+      <div class="detail" id="detail"></div>
+    </div>
+
+    <div class="decisions">
+      <h2>Design decisions &amp; trade-offs</h2>
+      <div class="dgrid" id="decisions"></div>
+    </div>
+  </div>
+  <footer>
+    invoice-sync · Node + TypeScript · Fastify · Postgres · QuickBooks Online (sandbox) · last-write-wins reconciliation
+  </footer>
+</main>
+
+<div id="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>
