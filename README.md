@@ -6,6 +6,9 @@ events, out-of-order delivery, conflicting edits, and partial failures.
 
 Design write-up with tradeoff reasoning: [decisions.md](decisions.md).
 
+Available to test with a small front-end on <demo-url-shared-privately> 
+also on the "Schematic" tab there is an explanation about how the connector works
+
 ## Architecture at a glance
 
 ```
@@ -77,28 +80,6 @@ npm run dev                 # starts API + sync worker (migrations run on boot)
 3. Visit `http://localhost:3000/qbo/connect` and authorize your sandbox
    company. Tokens are persisted in Postgres and refreshed automatically.
 4. `npm run seed` creates a demo customer.
-
-### Demo flow
-
-```bash
-# create a customer + invoice internally -> watch it appear in the QBO sandbox UI
-curl -X POST localhost:3000/internal/customers -H 'content-type: application/json' \
-  -d '{"name":"Acme Corp"}'
-curl -X POST localhost:3000/internal/invoices -H 'content-type: application/json' \
-  -d '{"customerId":"<id>","lines":[{"itemCode":"Services","quantity":2,"unitPriceCents":7500}]}'
-
-# pay it internally -> payment appears in QBO, invoice becomes Paid
-curl -X POST localhost:3000/internal/invoices/<id>/payments \
-  -H 'content-type: application/json' -d '{"amountCents":15000}'
-
-# edit the invoice in the QBO UI -> change flows back into the internal system
-curl localhost:3000/internal/invoices/<id>
-
-# observability
-curl localhost:3000/admin/audit                        # every sync decision (incl. LWW overwrites)
-curl localhost:3000/admin/events?status=dead           # dead-lettered events
-curl -X POST localhost:3000/admin/events/<id>/requeue  # re-run a dead event
-```
 
 ## Tests
 
