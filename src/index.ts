@@ -2,7 +2,7 @@ import { loadConfig } from "./config.js";
 import { migrate } from "./models/db/migrate.js";
 import { createDb } from "./models/db/pool.js";
 import { PgEntityLinkRepository } from "./models/repositories/entityLinkRepository.js";
-import { PgInboxRepository } from "./models/repositories/inboxRepository.js";
+import { PgEventQueue } from "./queue/pgEventQueue.js";
 import { PgAuditRepository } from "./models/repositories/auditRepository.js";
 import { PgProviderTokenRepository } from "./models/repositories/providerTokenRepository.js";
 import { PgItemMappingRepository } from "./models/repositories/itemMappingRepository.js";
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   const db = createDb(config.databaseUrl);
 
   const links = new PgEntityLinkRepository(db);
-  const inbox = new PgInboxRepository(db);
+  const queue = new PgEventQueue(db);
   const audit = new PgAuditRepository(db);
   const tokenRepository = new PgProviderTokenRepository(db);
   const itemMappingRepository = new PgItemMappingRepository(db);
@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 
   const provider = createAccountingProvider(config, { tokenRepository, itemMappingRepository });
   const syncService = new SyncService({ provider, links, audit, internalInvoices });
-  const worker = new SyncWorker(inbox, syncService, audit, {
+  const worker = new SyncWorker(queue, syncService, audit, {
     pollIntervalMs: config.syncPollIntervalMs,
     maxAttempts: config.syncMaxAttempts,
   });
@@ -44,8 +44,8 @@ async function main(): Promise<void> {
 
   const app = buildServer({
     invoices: new InvoiceController(internalInvoices, emitter, db),
-    webhooks: new WebhookController(inbox, provider),
-    admin: new AdminController(audit, inbox, links, tokenRepository, provider.name),
+    webhooks: new WebhookController(queue, provider),
+    admin: new AdminController(audit, queue, links, tokenRepository, provider.name),
     qboAuth: provider instanceof QboProvider ? new QboAuthController(provider.auth) : null,
     ui: new UiController(),
   });

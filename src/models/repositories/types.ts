@@ -38,55 +38,6 @@ export interface EntityLinkRepository {
   listAll(limit?: number): Promise<EntityLink[]>;
 }
 
-// --- inbox / work queue ---
-
-export type InboundEventStatus =
-  | "pending"
-  | "in_flight"
-  | "processed"
-  | "skipped"
-  | "failed"
-  | "dead";
-
-export interface InboundEvent {
-  id: number;
-  source: string;
-  entityType: string;
-  entityId: string;
-  operation: string;
-  occurredAt: Date;
-  dedupeKey: string;
-  payload: unknown;
-  status: InboundEventStatus;
-  attempts: number;
-  lastError: string | null;
-}
-
-export interface IngestEventInput {
-  source: string;
-  entityType: string;
-  entityId: string;
-  operation: string;
-  occurredAt: Date;
-  dedupeKey: string;
-  payload?: unknown;
-}
-
-export interface InboxRepository {
-  /** Insert with ON CONFLICT (dedupe_key) DO NOTHING. Returns null on duplicate. */
-  ingest(event: IngestEventInput): Promise<InboundEvent | null>;
-  /**
-   * Claim the next due event with FOR UPDATE SKIP LOCKED and a lease
-   * (locked_until), so a crashed worker's events become claimable again.
-   */
-  claimNext(leaseMs: number): Promise<InboundEvent | null>;
-  markTerminal(id: number, status: "processed" | "skipped" | "dead", error?: string): Promise<void>;
-  scheduleRetry(id: number, nextAttemptAt: Date, error: string): Promise<void>;
-  listByStatus(status: InboundEventStatus, limit?: number): Promise<InboundEvent[]>;
-  /** Re-enqueue a dead-lettered event after human intervention. */
-  requeue(id: number): Promise<void>;
-}
-
 // --- audit ---
 
 export type AuditAction =

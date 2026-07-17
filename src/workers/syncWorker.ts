@@ -1,4 +1,5 @@
-import type { InboxRepository, AuditRepository } from "../models/repositories/types.js";
+import type { EventQueue, InboundEvent } from "../queue/eventQueue.js";
+import type { AuditRepository } from "../models/repositories/types.js";
 import type { SyncService } from "../services/syncService.js";
 import { PermanentProviderError, StaleVersionError } from "../providers/errors.js";
 
@@ -12,10 +13,10 @@ export interface SyncWorkerOptions {
 }
 
 /**
- * Polls the inbox queue and runs each event through the sync pipeline.
+ * Consumes the event queue and runs each event through the sync pipeline.
  *
  * Outcome handling:
- * - ok/skip                  -> terminal (processed / skipped)
+ * - ok/skip                  -> ack (processed / skipped)
  * - StaleVersionError        -> retry; next attempt refetches fresh state,
  *                               so optimistic-lock races self-heal
  * - transient/unknown errors -> retry with exponential backoff + jitter
@@ -27,7 +28,7 @@ export class SyncWorker {
   private currentProcessing: Promise<void> | null = null;
 
   constructor(
-    private readonly inbox: InboxRepository,
+    private readonly queue: EventQueue,
     private readonly syncService: SyncService,
     private readonly audit: AuditRepository,
     private readonly options: SyncWorkerOptions,
@@ -58,43 +59,39 @@ export class SyncWorker {
 
   /** Claim and process one event. Returns false when the queue is empty. */
   async tick(): Promise<boolean> {
-    const event = await this.inbox.claimNext(this.options.leaseMs ?? 60_000);
+    const event = await this.queue.claim(this.options.leaseMs ?? 60_000);
     if (!event) return false;
-    this.currentProcessing = this.processClaimed(event.id, event);
+    this.currentProcessing = this.processClaimed(event);
     await this.currentProcessing;
     this.currentProcessing = null;
     return true;
   }
 
-  private async processClaimed(
-    eventId: number,
-    event: NonNullable<Awaited<ReturnType<InboxRepository["claimNext"]>>>,
-  ): Promise<void> {
+  private async processClaimed(event: InboundEvent): Promise<void> {
     try {
       const outcome = await this.syncService.processEvent(event);
-      await this.inbox.markTerminal(eventId, outcome.kind === "ok" ? "processed" : "skipped");
+      await this.queue.ack(event.id, outcome.kind === "ok" ? "processed" : "skipped");
     } catch (err) {
-      await this.handleError(eventId, event.entityType, event.attempts, err);
+      await this.handleError(event, err);
     }
   }
 
-  private async handleError(
-    eventId: number,
-    entityType: string,
-    attempts: number,
-    err: unknown,
-  ): Promise<void> {
+  private async handleError(event: InboundEvent, err: unknown): Promise<void> {
     const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 
     const permanent = err instanceof PermanentProviderError;
-    const exhausted = attempts >= this.options.maxAttempts;
+    const exhausted = event.attempts >= this.options.maxAttempts;
     if (permanent || exhausted) {
-      await this.inbox.markTerminal(eventId, "dead", message);
+      await this.queue.deadLetter(event.id, message);
       await this.audit.record({
-        inboundEventId: eventId,
-        entityType,
+        inboundEventId: event.id,
+        entityType: event.entityType,
         action: "failed",
-        detail: { reason: permanent ? "permanent_error" : "attempts_exhausted", message, attempts },
+        detail: {
+          reason: permanent ? "permanent_error" : "attempts_exhausted",
+          message,
+          attempts: event.attempts,
+        },
       });
       return;
     }
@@ -102,8 +99,8 @@ export class SyncWorker {
     // Stale optimistic-lock races retry quickly; other transient failures
     // back off exponentially with jitter.
     const delayMs =
-      err instanceof StaleVersionError ? 100 : this.backoffDelay(attempts);
-    await this.inbox.scheduleRetry(eventId, new Date(Date.now() + delayMs), message);
+      err instanceof StaleVersionError ? 100 : this.backoffDelay(event.attempts);
+    await this.queue.retryLater(event.id, new Date(Date.now() + delayMs), message);
   }
 
   private backoffDelay(attempts: number): number {

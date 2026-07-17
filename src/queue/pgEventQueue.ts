@@ -1,11 +1,11 @@
-import type { Kysely } from "kysely";
-import type { Database } from "../db/schema.js";
+import { sql, type Kysely } from "kysely";
+import type { Database } from "../models/db/schema.js";
 import type {
+  EventQueue,
   InboundEvent,
   InboundEventStatus,
-  InboxRepository,
   IngestEventInput,
-} from "./types.js";
+} from "./eventQueue.js";
 
 interface Row {
   id: number;
@@ -37,10 +37,11 @@ function toEvent(row: Row): InboundEvent {
   };
 }
 
-export class PgInboxRepository implements InboxRepository {
+/** Postgres adapter: inbox table + FOR UPDATE SKIP LOCKED work queue. */
+export class PgEventQueue implements EventQueue {
   constructor(private readonly db: Kysely<Database>) {}
 
-  async ingest(event: IngestEventInput): Promise<InboundEvent | null> {
+  async publish(event: IngestEventInput): Promise<InboundEvent | null> {
     const row = await this.db
       .insertInto("inbound_events")
       .values({
@@ -58,9 +59,12 @@ export class PgInboxRepository implements InboxRepository {
     return row ? toEvent(row) : null;
   }
 
-  async claimNext(leaseMs: number): Promise<InboundEvent | null> {
+  async claim(leaseMs: number): Promise<InboundEvent | null> {
     return this.db.transaction().execute(async (trx) => {
-      const now = new Date();
+      // Due-ness and lease expiry are decided on the database clock, the same
+      // clock that stamped next_attempt_at on insert; comparing against the
+      // app clock would make freshly published events invisible under skew.
+      const dbNow = sql<Date>`clock_timestamp()`;
       const row = await trx
         .selectFrom("inbound_events")
         .selectAll()
@@ -68,10 +72,10 @@ export class PgInboxRepository implements InboxRepository {
           eb.or([
             eb.and([
               eb("status", "in", ["pending", "failed"]),
-              eb("next_attempt_at", "<=", now),
+              eb("next_attempt_at", "<=", dbNow),
             ]),
             // Reclaim events whose worker died mid-processing (expired lease).
-            eb.and([eb("status", "=", "in_flight"), eb("locked_until", "<=", now)]),
+            eb.and([eb("status", "=", "in_flight"), eb("locked_until", "<=", dbNow)]),
           ]),
         )
         .orderBy("id", "asc")
@@ -86,7 +90,7 @@ export class PgInboxRepository implements InboxRepository {
         .set({
           status: "in_flight",
           attempts: row.attempts + 1,
-          locked_until: new Date(now.getTime() + leaseMs),
+          locked_until: sql`clock_timestamp() + ${leaseMs} * interval '1 millisecond'`,
         })
         .where("id", "=", row.id)
         .returningAll()
@@ -95,24 +99,15 @@ export class PgInboxRepository implements InboxRepository {
     });
   }
 
-  async markTerminal(
-    id: number,
-    status: "processed" | "skipped" | "dead",
-    error?: string,
-  ): Promise<void> {
-    await this.db
-      .updateTable("inbound_events")
-      .set({
-        status,
-        processed_at: new Date(),
-        locked_until: null,
-        last_error: error ?? null,
-      })
-      .where("id", "=", id)
-      .execute();
+  async ack(id: number, disposition: "processed" | "skipped"): Promise<void> {
+    await this.markTerminal(id, disposition);
   }
 
-  async scheduleRetry(id: number, nextAttemptAt: Date, error: string): Promise<void> {
+  async deadLetter(id: number, error: string): Promise<void> {
+    await this.markTerminal(id, "dead", error);
+  }
+
+  async retryLater(id: number, nextAttemptAt: Date, error: string): Promise<void> {
     await this.db
       .updateTable("inbound_events")
       .set({
@@ -140,6 +135,23 @@ export class PgInboxRepository implements InboxRepository {
     await this.db
       .updateTable("inbound_events")
       .set({ status: "pending", next_attempt_at: new Date(), attempts: 0, locked_until: null })
+      .where("id", "=", id)
+      .execute();
+  }
+
+  private async markTerminal(
+    id: number,
+    status: "processed" | "skipped" | "dead",
+    error?: string,
+  ): Promise<void> {
+    await this.db
+      .updateTable("inbound_events")
+      .set({
+        status,
+        processed_at: new Date(),
+        locked_until: null,
+        last_error: error ?? null,
+      })
       .where("id", "=", id)
       .execute();
   }

@@ -2,17 +2,16 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type {
   AuditRepository,
   EntityLinkRepository,
-  InboundEventStatus,
-  InboxRepository,
   ProviderTokenRepository,
 } from "../models/repositories/types.js";
+import type { EventQueue, InboundEventStatus } from "../queue/eventQueue.js";
 import { auditView } from "../views/auditView.js";
 
 /** Observability endpoints: audit trail, dead-letter queue, links, status. */
 export class AdminController {
   constructor(
     private readonly audit: AuditRepository,
-    private readonly inbox: InboxRepository,
+    private readonly queue: EventQueue,
     private readonly links: EntityLinkRepository,
     private readonly tokens: ProviderTokenRepository,
     private readonly providerName: string,
@@ -28,12 +27,12 @@ export class AdminController {
     reply: FastifyReply,
   ) => {
     const status = (req.query.status ?? "dead") as InboundEventStatus;
-    const events = await this.inbox.listByStatus(status);
+    const events = await this.queue.listByStatus(status);
     return reply.send(events);
   };
 
   requeueEvent = async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    await this.inbox.requeue(Number(req.params.id));
+    await this.queue.requeue(Number(req.params.id));
     return reply.send({ requeued: true });
   };
 

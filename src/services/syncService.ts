@@ -7,11 +7,11 @@ import {
   type ComparableInvoice,
 } from "../models/invoice.js";
 import { resolve, type Resolution } from "./conflictResolver.js";
+import type { InboundEvent } from "../queue/eventQueue.js";
 import type {
   AuditRepository,
   EntityLink,
   EntityLinkRepository,
-  InboundEvent,
   InternalInvoice,
   InternalInvoiceRepository,
 } from "../models/repositories/types.js";

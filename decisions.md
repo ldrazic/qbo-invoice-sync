@@ -34,6 +34,17 @@ reliability story:
 - retries, backoff, and dead-lettering are ordinary rows, inspectable and
   requeueable via `/admin`.
 
+The queue itself is a port, not a Postgres commitment: the worker and the
+ingestion endpoints depend on the `EventQueue` contract (publish / claim /
+ack / retryLater / deadLetter in `src/queue/eventQueue.ts`), and the inbox
+table is one adapter behind it. Swapping in a broker means writing another
+adapter and mapping the semantics — publish-side dedupe onto an idempotent
+producer or a consumer-side dedupe store, claim+lease onto consumer groups or
+visibility timeouts, retry/dead-letter onto retry and DLQ topics. Postgres
+was the right *first* adapter on purpose: at this scale it gives exactly-once
+claiming, ordered delivery, delayed retries, and an inspectable dead-letter
+queue for free, in a system that already runs Postgres.
+
 ## Never trust the payload
 
 The pipeline treats an event only as a *hint that something changed* and

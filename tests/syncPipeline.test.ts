@@ -4,7 +4,7 @@ import type { Database } from "../src/models/db/schema.js";
 import { setupTestDb, truncateAll } from "./helpers/testDb.js";
 import { FakeProvider } from "../src/providers/fake/fakeProvider.js";
 import { PgEntityLinkRepository } from "../src/models/repositories/entityLinkRepository.js";
-import { PgInboxRepository } from "../src/models/repositories/inboxRepository.js";
+import { PgEventQueue } from "../src/queue/pgEventQueue.js";
 import { PgAuditRepository } from "../src/models/repositories/auditRepository.js";
 import { PgInternalInvoiceRepository } from "../src/models/repositories/internalInvoiceRepository.js";
 import { SyncService } from "../src/services/syncService.js";
@@ -16,7 +16,7 @@ let db: Kysely<Database>;
 interface Stack {
   provider: FakeProvider;
   links: PgEntityLinkRepository;
-  inbox: PgInboxRepository;
+  queue: PgEventQueue;
   audit: PgAuditRepository;
   invoices: PgInternalInvoiceRepository;
   worker: SyncWorker;
@@ -25,18 +25,18 @@ interface Stack {
 function buildStack(): Stack {
   const provider = new FakeProvider();
   const links = new PgEntityLinkRepository(db);
-  const inbox = new PgInboxRepository(db);
+  const queue = new PgEventQueue(db);
   const audit = new PgAuditRepository(db);
   const invoices = new PgInternalInvoiceRepository(db);
   const syncService = new SyncService({ provider, links, audit, internalInvoices: invoices });
-  const worker = new SyncWorker(inbox, syncService, audit, {
+  const worker = new SyncWorker(queue, syncService, audit, {
     pollIntervalMs: 5,
     maxAttempts: 5,
     backoffBaseMs: 1,
     backoffMaxMs: 5,
     leaseMs: 60_000,
   });
-  return { provider, links, inbox, audit, invoices, worker };
+  return { provider, links, queue, audit, invoices, worker };
 }
 
 /** Drain the queue across retry rounds until nothing is due. */
@@ -101,7 +101,7 @@ function providerEvent(entityId: string, operation: string, entityType = "invoic
 async function syncedInvoice(stack: Stack): Promise<{ invoice: InternalInvoice; externalId: string }> {
   const customerId = await createCustomer();
   const invoice = await createInvoice(stack, customerId);
-  await stack.inbox.ingest(internalEvent(invoice, "create"));
+  await stack.queue.publish(internalEvent(invoice, "create"));
   await processQueue(stack);
   const link = await stack.links.findByInternalId("fake", "invoice", invoice.id);
   expect(link).not.toBeNull();
@@ -138,8 +138,8 @@ describe("duplicate webhook delivery", () => {
     const customerId = await createCustomer();
     const invoice = await createInvoice(stack, customerId);
 
-    const first = await stack.inbox.ingest(internalEvent(invoice, "create"));
-    const second = await stack.inbox.ingest(internalEvent(invoice, "create"));
+    const first = await stack.queue.publish(internalEvent(invoice, "create"));
+    const second = await stack.queue.publish(internalEvent(invoice, "create"));
     expect(first).not.toBeNull();
     expect(second).toBeNull(); // ON CONFLICT DO NOTHING
 
@@ -153,7 +153,7 @@ describe("duplicate webhook delivery", () => {
     const { invoice } = await syncedInvoice(stack);
 
     // Same logical change redelivered later with a different dedupe key.
-    await stack.inbox.ingest({
+    await stack.queue.publish({
       ...internalEvent(invoice, "create"),
       dedupeKey: `internal:invoice:${invoice.id}:create:redelivery`,
     });
@@ -171,7 +171,7 @@ describe("echo suppression", () => {
     const { externalId } = await syncedInvoice(stack);
     const callsBefore = stack.provider.calls.length;
 
-    await stack.inbox.ingest(providerEvent(externalId, "create", "invoice", "echo"));
+    await stack.queue.publish(providerEvent(externalId, "create", "invoice", "echo"));
     await processQueue(stack);
 
     const audit = await stack.audit.list();
@@ -191,10 +191,10 @@ describe("out-of-order events", () => {
     const v3 = await stack.invoices.update(invoice.id, { notes: "third edit" });
 
     // The NEWER event arrives first and is processed.
-    await stack.inbox.ingest(internalEvent(v3, "update"));
+    await stack.queue.publish(internalEvent(v3, "update"));
     await processQueue(stack);
     // The OLDER event arrives late.
-    await stack.inbox.ingest(internalEvent(v2, "update"));
+    await stack.queue.publish(internalEvent(v2, "update"));
     await processQueue(stack);
 
     const link = await stack.links.findByInternalId("fake", "invoice", invoice.id);
@@ -214,7 +214,7 @@ describe("timeout after write (ambiguous write)", () => {
 
     // The provider applies the create, then the call "times out".
     stack.provider.failNext({ kind: "timeout_after_write" });
-    await stack.inbox.ingest(internalEvent(invoice, "create"));
+    await stack.queue.publish(internalEvent(invoice, "create"));
     await processQueue(stack);
 
     expect(stack.provider.invoiceCount()).toBe(1);
@@ -225,7 +225,7 @@ describe("timeout after write (ambiguous write)", () => {
     const audit = await stack.audit.list();
     expect(audit.some((a) => a.action === "linked_existing")).toBe(true);
 
-    const events = await stack.inbox.listByStatus("processed");
+    const events = await stack.queue.listByStatus("processed");
     expect(events).toHaveLength(1);
   });
 });
@@ -257,7 +257,7 @@ describe("conflicting edits (last write wins)", () => {
       ],
     });
 
-    await stack.inbox.ingest(internalEvent(edited, "update"));
+    await stack.queue.publish(internalEvent(edited, "update"));
     await processQueue(stack);
 
     const internalAfter = await stack.invoices.get(invoice.id);
@@ -288,7 +288,7 @@ describe("conflicting edits (last write wins)", () => {
     });
     const edited = await stack.invoices.update(invoice.id, { notes: "newer internal edit" });
 
-    await stack.inbox.ingest(internalEvent(edited, "update"));
+    await stack.queue.publish(internalEvent(edited, "update"));
     await processQueue(stack);
 
     const externalAfter = stack.provider.directlyGetInvoice(externalId)!;
@@ -312,13 +312,13 @@ describe("conflicting edits (last write wins)", () => {
     // ...then the internal user voids (newer): the void wins.
     const voided = await stack.invoices.setLifecycle(invoice.id, "voided");
 
-    await stack.inbox.ingest(internalEvent(voided, "void"));
+    await stack.queue.publish(internalEvent(voided, "void"));
     await processQueue(stack);
 
     expect(stack.provider.directlyGetInvoice(externalId)!.invoice.status).toBe("voided");
     // Nothing left stuck: LWW never parks events waiting for a human.
-    expect(await stack.inbox.listByStatus("dead")).toHaveLength(0);
-    expect(await stack.inbox.listByStatus("pending")).toHaveLength(0);
+    expect(await stack.queue.listByStatus("dead")).toHaveLength(0);
+    expect(await stack.queue.listByStatus("pending")).toHaveLength(0);
     const audit = await stack.audit.list();
     expect(audit.some((a) => a.action === "conflict_lww")).toBe(true);
   });
@@ -330,7 +330,7 @@ describe("conflicting edits (last write wins)", () => {
     stack.provider.directlyDeleteInvoice(externalId);
     const edited = await stack.invoices.update(invoice.id, { notes: "edited after delete" });
 
-    await stack.inbox.ingest(internalEvent(edited, "update"));
+    await stack.queue.publish(internalEvent(edited, "update"));
     await processQueue(stack);
 
     expect(stack.provider.invoiceCount()).toBe(1);
@@ -348,7 +348,7 @@ describe("void and delete propagation", () => {
     const { invoice, externalId } = await syncedInvoice(stack);
 
     const deleted = await stack.invoices.setLifecycle(invoice.id, "deleted");
-    await stack.inbox.ingest(internalEvent(deleted, "delete"));
+    await stack.queue.publish(internalEvent(deleted, "delete"));
     await processQueue(stack);
 
     const stored = stack.provider.directlyGetInvoice(externalId)!;
@@ -361,7 +361,7 @@ describe("void and delete propagation", () => {
     const { invoice, externalId } = await syncedInvoice(stack);
 
     stack.provider.directlyDeleteInvoice(externalId);
-    await stack.inbox.ingest(providerEvent(externalId, "delete"));
+    await stack.queue.publish(providerEvent(externalId, "delete"));
     await processQueue(stack);
 
     const internalAfter = await stack.invoices.get(invoice.id);
@@ -379,13 +379,13 @@ describe("payments", () => {
     });
     expect(updated.status).toBe("partial");
 
-    await stack.inbox.ingest(internalEvent(updated, "create", "payment", paymentId));
+    await stack.queue.publish(internalEvent(updated, "create", "payment", paymentId));
     await processQueue(stack);
     expect(stack.provider.calls.filter((c) => c.startsWith("createPayment")).length).toBe(1);
     expect(stack.provider.directlyGetInvoice(externalId)!.invoice.status).toBe("partial");
 
     // Redelivered payment event (fresh dedupe key): link already exists -> skip.
-    await stack.inbox.ingest({
+    await stack.queue.publish({
       ...internalEvent(updated, "create", "payment", paymentId),
       dedupeKey: `internal:payment:${paymentId}:create:redelivery`,
     });
@@ -408,7 +408,7 @@ describe("payments", () => {
       externalId,
     );
 
-    await stack.inbox.ingest(providerEvent(external.externalId, "create", "payment"));
+    await stack.queue.publish(providerEvent(external.externalId, "create", "payment"));
     await processQueue(stack);
 
     const internalAfter = await stack.invoices.get(invoice.id);
@@ -416,7 +416,7 @@ describe("payments", () => {
     expect(internalAfter!.balanceCents).toBe(0);
 
     // Echo/duplicate of the same provider payment: skipped via link.
-    await stack.inbox.ingest(providerEvent(external.externalId, "create", "payment", "again"));
+    await stack.queue.publish(providerEvent(external.externalId, "create", "payment", "again"));
     await processQueue(stack);
     expect((await stack.invoices.get(invoice.id))!.payments).toHaveLength(1);
   });
@@ -430,11 +430,11 @@ describe("retries and partial failure", () => {
 
     stack.provider.failNext({ kind: "transient" });
     stack.provider.failNext({ kind: "transient" });
-    await stack.inbox.ingest(internalEvent(invoice, "create"));
+    await stack.queue.publish(internalEvent(invoice, "create"));
     await processQueue(stack);
 
     expect(stack.provider.invoiceCount()).toBe(1);
-    const processed = await stack.inbox.listByStatus("processed");
+    const processed = await stack.queue.listByStatus("processed");
     expect(processed).toHaveLength(1);
     expect(processed[0]!.attempts).toBeGreaterThanOrEqual(2);
   });
@@ -445,10 +445,10 @@ describe("retries and partial failure", () => {
     const invoice = await createInvoice(stack, customerId);
 
     stack.provider.failNext({ kind: "permanent" });
-    await stack.inbox.ingest(internalEvent(invoice, "create"));
+    await stack.queue.publish(internalEvent(invoice, "create"));
     await processQueue(stack);
 
-    const dead = await stack.inbox.listByStatus("dead");
+    const dead = await stack.queue.listByStatus("dead");
     expect(dead).toHaveLength(1);
     expect(dead[0]!.attempts).toBe(1);
   });
@@ -457,17 +457,17 @@ describe("retries and partial failure", () => {
     const stack = buildStack();
     const customerId = await createCustomer();
     const invoice = await createInvoice(stack, customerId);
-    await stack.inbox.ingest(internalEvent(invoice, "create"));
+    await stack.queue.publish(internalEvent(invoice, "create"));
 
     // Worker A claims with a tiny lease and "crashes" (never finishes).
-    const claimed = await stack.inbox.claimNext(10);
+    const claimed = await stack.queue.claim(10);
     expect(claimed).not.toBeNull();
     // Immediately after, the event is locked.
-    expect(await stack.inbox.claimNext(10)).toBeNull();
+    expect(await stack.queue.claim(10)).toBeNull();
 
     // After the lease expires, another worker can reclaim it.
     await new Promise((r) => setTimeout(r, 30));
-    const reclaimed = await stack.inbox.claimNext(60_000);
+    const reclaimed = await stack.queue.claim(60_000);
     expect(reclaimed).not.toBeNull();
     expect(reclaimed!.id).toBe(claimed!.id);
     expect(reclaimed!.attempts).toBe(2);

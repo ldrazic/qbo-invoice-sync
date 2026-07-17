@@ -27,6 +27,11 @@ webhook                                             │        snapshot
   are no-ops). The inbox doubles as a durable work queue
   (`FOR UPDATE SKIP LOCKED` + lease, so a crashed worker's events are
   reclaimed).
+- **Queue as a port**: the sync engine depends only on the `EventQueue`
+  contract (`src/queue/eventQueue.ts` — publish / claim / ack / retryLater /
+  deadLetter); Postgres is one adapter (`pgEventQueue.ts`). Moving to Kafka or
+  SQS means writing another adapter, not touching the worker or the
+  ingestion endpoints.
 - **Never trust the payload**: the pipeline always refetches current state
   from both systems (QBO webhooks don't include payloads anyway).
 - **Conflict resolution: last write wins (LWW)**. The last successfully
