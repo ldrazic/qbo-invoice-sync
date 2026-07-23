@@ -229,6 +229,26 @@ export class FakeProvider implements AccountingProvider {
     return { externalId, syncToken: "0", payment: structuredClone(payment) };
   }
 
+  /** Inject a payment as if recorded in the provider UI (e.g. multi-invoice). */
+  directlyAddPayment(payment: CanonicalPayment): string {
+    const externalId = randomUUID();
+    this.payments.set(externalId, { externalId, syncToken: 0, payment: structuredClone(payment) });
+    for (const allocation of payment.allocations) {
+      for (const stored of this.invoices.values()) {
+        if (stored.invoice.docNumber === allocation.invoiceDocNumber) {
+          const balance = stored.invoice.balanceCents - allocation.amountCents;
+          stored.invoice = {
+            ...stored.invoice,
+            balanceCents: balance,
+            status: balance <= 0 ? "paid" : "partial",
+          };
+          stored.syncToken += 1;
+        }
+      }
+    }
+    return externalId;
+  }
+
   verifyWebhookSignature(): boolean {
     return true;
   }

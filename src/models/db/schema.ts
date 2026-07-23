@@ -43,6 +43,8 @@ export interface PaymentsTable {
   method: Generated<string>;
   received_at: Generated<Date>;
   created_at: Generated<Date>;
+  /** Unique per provider payment (allocation); NULL for internal payments. */
+  external_ref: string | null;
 }
 
 export interface EntityLinksTable {

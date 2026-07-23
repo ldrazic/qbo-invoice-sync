@@ -227,12 +227,37 @@ export class PgInternalInvoiceRepository implements InternalInvoiceRepository {
 
   async applyExternalPayment(
     invoiceId: string,
-    payment: CanonicalPayment,
-  ): Promise<{ invoice: InternalInvoice; paymentId: string }> {
-    return this.addPayment(invoiceId, {
-      amountCents: payment.amountCents,
-      method: payment.method ?? "other",
-      receivedAt: new Date(payment.receivedAt),
+    payment: { amountCents: number; method?: string | undefined; receivedAt?: Date | undefined },
+    externalRef: string,
+  ): Promise<{ invoice: InternalInvoice; paymentId: string; created: boolean }> {
+    return this.db.transaction().execute(async (trx) => {
+      const inserted = await trx
+        .insertInto("payments")
+        .values({
+          invoice_id: invoiceId,
+          amount_cents: payment.amountCents,
+          method: payment.method ?? "other",
+          received_at: payment.receivedAt ?? new Date(),
+          external_ref: externalRef,
+        })
+        .onConflict((oc) => oc.column("external_ref").doNothing())
+        .returning("id")
+        .executeTakeFirst();
+
+      if (inserted) {
+        await bumpVersion(trx, invoiceId);
+        await recomputePaymentStatus(trx, invoiceId);
+        return { invoice: await this.mustGet(trx, invoiceId), paymentId: inserted.id, created: true };
+      }
+
+      // Already applied by a previous (crashed) attempt: converge.
+      const existing = await trx
+        .selectFrom("payments")
+        .select(["id", "invoice_id"])
+        .where("external_ref", "=", externalRef)
+        .executeTakeFirstOrThrow();
+      await recomputePaymentStatus(trx, existing.invoice_id);
+      return { invoice: await this.mustGet(trx, existing.invoice_id), paymentId: existing.id, created: false };
     });
   }
 

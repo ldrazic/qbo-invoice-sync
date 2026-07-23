@@ -150,8 +150,15 @@ export interface InternalInvoiceRepository {
   toCanonical(invoice: InternalInvoice): CanonicalInvoice;
   /** Apply externally-sourced state (create or update), bumping version. */
   applyCanonical(invoice: CanonicalInvoice, existingId?: string): Promise<InternalInvoice>;
+  /**
+   * Apply one allocation of an external payment. Idempotent on externalRef
+   * (unique index + ON CONFLICT DO NOTHING): a retry after a crash between
+   * inserting the payment and recording the entity link converges instead of
+   * double-applying. `created` is false when the row already existed.
+   */
   applyExternalPayment(
     invoiceId: string,
-    payment: CanonicalPayment,
-  ): Promise<{ invoice: InternalInvoice; paymentId: string }>;
+    payment: { amountCents: number; method?: string | undefined; receivedAt?: Date | undefined },
+    externalRef: string,
+  ): Promise<{ invoice: InternalInvoice; paymentId: string; created: boolean }>;
 }

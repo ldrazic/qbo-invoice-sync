@@ -399,10 +399,10 @@ describe("payments", () => {
 
     const external = await stack.provider.createPayment(
       {
-        invoiceDocNumber: invoice.docNumber,
         amountCents: 10_000,
         method: "card",
         receivedAt: new Date().toISOString(),
+        allocations: [{ invoiceDocNumber: invoice.docNumber, amountCents: 10_000 }],
         referenceCode: null,
       },
       externalId,
@@ -416,6 +416,85 @@ describe("payments", () => {
     expect(internalAfter!.balanceCents).toBe(0);
 
     // Echo/duplicate of the same provider payment: skipped via link.
+    await stack.queue.publish(providerEvent(external.externalId, "create", "payment", "again"));
+    await processQueue(stack);
+    expect((await stack.invoices.get(invoice.id))!.payments).toHaveLength(1);
+  });
+
+  it("splits a multi-invoice provider payment across its allocations", async () => {
+    const stack = buildStack();
+    const customerId = await createCustomer();
+    const invoiceA = await createInvoice(stack, customerId); // $100.00
+    const invoiceB = await stack.invoices.create({
+      customerId,
+      lines: [{ itemCode: "Hours", quantity: 3, unitPriceCents: 20_000 }], // $600.00
+    });
+    await stack.queue.publish(internalEvent(invoiceA, "create"));
+    await stack.queue.publish(internalEvent(invoiceB, "create"));
+    await processQueue(stack);
+
+    // One provider payment of $700 covering both invoices in full.
+    const paymentId = stack.provider.directlyAddPayment({
+      amountCents: 70_000,
+      method: "card",
+      receivedAt: new Date().toISOString(),
+      allocations: [
+        { invoiceDocNumber: invoiceA.docNumber, amountCents: 10_000 },
+        { invoiceDocNumber: invoiceB.docNumber, amountCents: 60_000 },
+      ],
+      referenceCode: null,
+    });
+    await stack.queue.publish(providerEvent(paymentId, "create", "payment"));
+    await processQueue(stack);
+
+    // Each invoice got exactly its allocated share — not the payment total.
+    const afterA = await stack.invoices.get(invoiceA.id);
+    const afterB = await stack.invoices.get(invoiceB.id);
+    expect(afterA!.payments).toHaveLength(1);
+    expect(afterA!.payments[0]!.amountCents).toBe(10_000);
+    expect(afterA!.status).toBe("paid");
+    expect(afterB!.payments).toHaveLength(1);
+    expect(afterB!.payments[0]!.amountCents).toBe(60_000);
+    expect(afterB!.status).toBe("paid");
+  });
+
+  it("converges instead of double-applying when a crash hit between payment insert and link creation", async () => {
+    const stack = buildStack();
+    const { invoice, externalId } = await syncedInvoice(stack);
+
+    const external = await stack.provider.createPayment(
+      {
+        amountCents: 4_000,
+        method: "card",
+        receivedAt: new Date().toISOString(),
+        allocations: [{ invoiceDocNumber: invoice.docNumber, amountCents: 4_000 }],
+        referenceCode: null,
+      },
+      externalId,
+    );
+
+    // Simulate the partial success: a previous attempt inserted the internal
+    // payment (same external_ref the pipeline will derive) and crashed before
+    // creating the entity link.
+    await stack.invoices.applyExternalPayment(
+      invoice.id,
+      { amountCents: 4_000, method: "card" },
+      `fake:payment:${external.externalId}:${invoice.docNumber}`,
+    );
+    expect((await stack.invoices.get(invoice.id))!.payments).toHaveLength(1);
+
+    // The reclaimed event reprocesses from scratch (no link exists yet).
+    await stack.queue.publish(providerEvent(external.externalId, "create", "payment"));
+    await processQueue(stack);
+
+    const after = await stack.invoices.get(invoice.id);
+    expect(after!.payments).toHaveLength(1); // no duplicate
+    expect(after!.payments[0]!.amountCents).toBe(4_000);
+    expect(after!.balanceCents).toBe(6_000);
+    const link = await stack.links.findByExternalId("fake", "payment", external.externalId);
+    expect(link).not.toBeNull(); // retry completed the missing half
+
+    // And a later redelivery is a clean echo skip.
     await stack.queue.publish(providerEvent(external.externalId, "create", "payment", "again"));
     await processQueue(stack);
     expect((await stack.invoices.get(invoice.id))!.payments).toHaveLength(1);

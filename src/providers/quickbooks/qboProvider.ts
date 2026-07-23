@@ -131,23 +131,28 @@ export class QboProvider implements AccountingProvider {
     return {
       externalId: qbo.Id,
       syncToken: qbo.SyncToken,
-      payment: await this.mapper.fromQboPayment(qbo, invoice.DocNumber ?? null),
+      payment: await this.mapper.fromQboPayment(
+        qbo,
+        invoice.DocNumber
+          ? [{ invoiceDocNumber: invoice.DocNumber, amountCents: payment.amountCents }]
+          : [],
+      ),
     };
   }
 
   private async toPaymentState(qbo: QboPaymentJson): Promise<ExternalPaymentState> {
-    // Payment webhooks/records don't carry the invoice DocNumber; resolve it
-    // through the linked transaction.
-    const linkedInvoiceId = this.mapper.linkedInvoiceId(qbo);
-    let docNumber: string | null = null;
-    if (linkedInvoiceId) {
-      const invoiceResult = await this.client.get(`/invoice/${linkedInvoiceId}`);
-      docNumber = (invoiceResult?.Invoice as QboInvoiceJson | undefined)?.DocNumber ?? null;
+    // Payment records don't carry invoice DocNumbers; resolve every linked
+    // transaction so multi-invoice payments keep their per-invoice split.
+    const allocations = [];
+    for (const { txnId, amountCents } of this.mapper.linkedInvoiceAllocations(qbo)) {
+      const invoiceResult = await this.client.get(`/invoice/${txnId}`);
+      const docNumber = (invoiceResult?.Invoice as QboInvoiceJson | undefined)?.DocNumber;
+      if (docNumber) allocations.push({ invoiceDocNumber: docNumber, amountCents });
     }
     return {
       externalId: qbo.Id,
       syncToken: qbo.SyncToken,
-      payment: await this.mapper.fromQboPayment(qbo, docNumber),
+      payment: await this.mapper.fromQboPayment(qbo, allocations),
     };
   }
 

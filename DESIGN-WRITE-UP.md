@@ -116,6 +116,25 @@ jitter; `StaleVersionError` → fast retry (refetch resolves it);
 `PermanentProviderError` (validation, 4xx) → dead-letter immediately, visible
 and requeueable in `/admin/events?status=dead`.
 
+## Changes made in response to review feedback
+
+Two payment-path defects were reported after the first submission; both are
+fixed and covered by dedicated tests:
+
+1. **External payment application was not idempotent under partial success.**
+   The internal payment insert and the entity-link creation were separate
+   writes; a crash between them made the reclaimed event insert the payment
+   again. Payments now carry a unique `external_ref`
+   (`<provider>:payment:<id>:<docNumber>`) and are applied with
+   `INSERT ... ON CONFLICT DO NOTHING`, so reprocessing converges no matter
+   where the previous attempt died — the same lookup-before-create discipline
+   the invoice path already had.
+2. **Multi-invoice QBO payments were applied to a single invoice.** The
+   mapper took the first `LinkedTxn` and applied the payment's `TotalAmt` to
+   it. Payments are now mapped as per-invoice **allocations** (each QBO
+   payment Line's `Amount` + its linked invoice) and each allocation is
+   applied to its own invoice, idempotently per allocation.
+
 ## What I deliberately did not build
 
 - **Reconciliation job** (QBO Change Data Capture + internal scan) to catch

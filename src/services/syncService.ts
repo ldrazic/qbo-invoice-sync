@@ -406,10 +406,10 @@ export class SyncService {
 
     const referenceCode = paymentReferenceCode(event.entityId);
     const canonical = {
-      invoiceDocNumber: invoice.docNumber,
       amountCents: payment.amountCents,
       method: payment.method,
       receivedAt: payment.receivedAt.toISOString(),
+      allocations: [{ invoiceDocNumber: invoice.docNumber, amountCents: payment.amountCents }],
       referenceCode,
     };
 
@@ -461,18 +461,51 @@ export class SyncService {
     if (!external || !external.payment) {
       return this.skip(event, "skipped_stale", { reason: "external payment no longer exists" });
     }
-    const invoice = await this.internal.getByDocNumber(external.payment.invoiceDocNumber);
-    if (!invoice) {
-      throw new Error(
-        `internal invoice ${external.payment.invoiceDocNumber} not found for payment; retrying later`,
-      );
+    const { allocations } = external.payment;
+    if (allocations.length === 0) {
+      return this.skip(event, "skipped_noop", {
+        reason: "payment has no invoice allocations (unapplied/credit payment)",
+      });
     }
 
-    const { paymentId } = await this.internal.applyExternalPayment(invoice.id, external.payment);
+    // Resolve every allocation's invoice before writing anything, so a
+    // missing invoice retries the whole event instead of half-applying.
+    const targets = [];
+    for (const allocation of allocations) {
+      const invoice = await this.internal.getByDocNumber(allocation.invoiceDocNumber);
+      if (!invoice) {
+        throw new Error(
+          `internal invoice ${allocation.invoiceDocNumber} not found for payment; retrying later`,
+        );
+      }
+      targets.push({ allocation, invoice });
+    }
+
+    // One internal payment row per allocation, each idempotent on its
+    // external_ref — a crash anywhere in this loop converges on retry.
+    const applied = [];
+    for (const { allocation, invoice } of targets) {
+      const result = await this.internal.applyExternalPayment(
+        invoice.id,
+        {
+          amountCents: allocation.amountCents,
+          method: external.payment.method ?? "other",
+          receivedAt: new Date(external.payment.receivedAt),
+        },
+        `${this.provider.name}:payment:${event.entityId}:${allocation.invoiceDocNumber}`,
+      );
+      applied.push({
+        invoiceDocNumber: allocation.invoiceDocNumber,
+        amountCents: allocation.amountCents,
+        paymentId: result.paymentId,
+        deduplicated: !result.created,
+      });
+    }
+
     await this.links.create({
       provider: this.provider.name,
       entityType: "payment",
-      internalId: paymentId,
+      internalId: applied[0]!.paymentId,
       externalId: event.entityId,
       externalSyncToken: external.syncToken,
       internalVersion: null,
@@ -482,13 +515,13 @@ export class SyncService {
     await this.audit.record({
       inboundEventId: event.id,
       entityType: "payment",
-      internalId: paymentId,
+      internalId: applied[0]!.paymentId,
       externalId: event.entityId,
       action: "applied",
       detail: {
         direction: "external->internal",
-        amountCents: external.payment.amountCents,
-        invoiceDocNumber: external.payment.invoiceDocNumber,
+        totalCents: external.payment.amountCents,
+        allocations: applied,
       },
     });
     return { kind: "ok", action: "applied" };

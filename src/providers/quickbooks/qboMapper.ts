@@ -1,4 +1,4 @@
-import type { CanonicalInvoice, CanonicalPayment } from "../../models/invoice.js";
+import type { CanonicalInvoice, CanonicalPayment, PaymentAllocation } from "../../models/invoice.js";
 import { centsToDecimalString, decimalStringToCents } from "../../models/money.js";
 import type { ItemMappingRepository } from "../../models/repositories/types.js";
 import { PermanentProviderError } from "../errors.js";
@@ -147,25 +147,31 @@ export class QboMapper {
 
   async fromQboPayment(
     qbo: QboPaymentJson,
-    linkedInvoiceDocNumber: string | null,
+    allocations: PaymentAllocation[],
   ): Promise<CanonicalPayment> {
     return {
-      invoiceDocNumber: linkedInvoiceDocNumber ?? "",
       amountCents: decimalStringToCents(qbo.TotalAmt ?? 0),
       method: null,
       receivedAt: qbo.TxnDate ?? qbo.MetaData?.LastUpdatedTime ?? new Date().toISOString(),
+      allocations,
       referenceCode: qbo.PaymentRefNum ?? null,
     };
   }
 
-  /** First linked Invoice TxnId in the payment, if any. */
-  linkedInvoiceId(qbo: QboPaymentJson): string | null {
+  /**
+   * Per-invoice allocations of a QBO payment: each payment Line carries the
+   * amount applied to the invoice in its LinkedTxn. A payment can cover
+   * several invoices, so TotalAmt must never be applied to a single one.
+   */
+  linkedInvoiceAllocations(qbo: QboPaymentJson): Array<{ txnId: string; amountCents: number }> {
+    const allocations: Array<{ txnId: string; amountCents: number }> = [];
     for (const line of qbo.Line ?? []) {
-      for (const txn of line.LinkedTxn ?? []) {
-        if (txn.TxnType === "Invoice" && txn.TxnId) return txn.TxnId;
+      const invoiceTxn = (line.LinkedTxn ?? []).find((t) => t.TxnType === "Invoice" && t.TxnId);
+      if (invoiceTxn?.TxnId) {
+        allocations.push({ txnId: invoiceTxn.TxnId, amountCents: decimalStringToCents(line.Amount ?? 0) });
       }
     }
-    return null;
+    return allocations;
   }
 
   /** Find-or-create a QBO customer by display name. */

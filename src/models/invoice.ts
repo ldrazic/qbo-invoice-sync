@@ -26,11 +26,22 @@ export interface CanonicalInvoice {
   sourceUpdatedAt: string;
 }
 
-export interface CanonicalPayment {
+/** How much of a payment applies to one specific invoice. */
+export interface PaymentAllocation {
   invoiceDocNumber: string;
+  amountCents: number;
+}
+
+export interface CanonicalPayment {
+  /** Total amount of the payment across all allocations. */
   amountCents: number;
   method: string | null;
   receivedAt: string;
+  /**
+   * Per-invoice split. QBO payments can cover several invoices; applying
+   * TotalAmt to a single invoice would misstate every balance involved.
+   */
+  allocations: PaymentAllocation[];
   /**
    * Short reference written into the provider's payment record (QBO
    * PaymentRefNum). Enables lookup-before-retry after an ambiguous write,
