@@ -4,10 +4,11 @@ A service that syncs invoices and payments bidirectionally between a (simulated
 but real) internal invoicing system and QuickBooks Online, handling duplicate
 events, out-of-order delivery, conflicting edits, and partial failures.
 
-Design write-up with tradeoff reasoning: [decisions.md](decisions.md).
+Design write-up with tradeoff reasoning: [DESIGN-WRITE-UP.md](DESIGN-WRITE-UP.md).
 
-Available to test with a small front-end on <demo-url-shared-privately> 
-also on the "Schematic" tab there is an explanation about how the connector works
+A live deployment with a small front-end is available for testing — the URL is
+shared privately with the submission. Its "Schematic" tab explains
+interactively how the connector works.
 
 ## Architecture at a glance
 
