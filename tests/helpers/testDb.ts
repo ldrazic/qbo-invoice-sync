@@ -6,9 +6,14 @@ import type { Database } from "../../src/models/db/schema.js";
 
 const ADMIN_URL =
   process.env.TEST_ADMIN_DATABASE_URL ?? "postgres://sync:sync@localhost:5433/invoice_sync";
-const TEST_DB_NAME = "invoice_sync_test";
 const TEST_URL =
-  process.env.TEST_DATABASE_URL ?? `postgres://sync:sync@localhost:5433/${TEST_DB_NAME}`;
+  process.env.TEST_DATABASE_URL ?? "postgres://sync:sync@localhost:5433/invoice_sync_test";
+// Derived from the URL so parallel worktrees can isolate suites by pointing
+// TEST_DATABASE_URL at their own database name.
+const TEST_DB_NAME = new URL(TEST_URL).pathname.replace(/^\//, "");
+if (!/^[a-z0-9_]+$/.test(TEST_DB_NAME)) {
+  throw new Error(`unsafe test database name: ${TEST_DB_NAME}`);
+}
 
 let prepared = false;
 
