@@ -196,6 +196,7 @@ function renderLinks(links) {
 // ---------------------------------------------------------------------------
 const ACTION_LABEL = {
   applied: "applied", linked_existing: "linked existing", conflict_lww: "conflict · last-write-wins",
+  applied_divergent: "applied · provider reallocated",
   recovered_orphan_write: "recovered orphan write", skipped_echo: "skipped echo",
   skipped_duplicate: "skipped duplicate", skipped_noop: "skipped no-op", skipped_stale: "skipped stale",
   failed: "failed",
@@ -204,7 +205,8 @@ function feedDetail(a) {
   const d = a.detail || {};
   if (d.direction) {
     const dir = d.direction === "internal->external" ? "internal → quickbooks" : "quickbooks → internal";
-    return `${dir}${d.docNumber ? " · " + d.docNumber : ""}${d.amountCents ? " · " + money(d.amountCents / 100) : ""}`;
+    const base = `${dir}${d.docNumber ? " · " + d.docNumber : ""}${d.amountCents ? " · " + money(d.amountCents / 100) : ""}`;
+    return d.divergence ? `${base} · ${d.divergence}` : base;
   }
   if (d.decision) return `${d.decision.replace("_", " ")}${d.wroteExternal ? " · wrote qbo" : ""}${d.wroteInternal ? " · wrote internal" : ""}`;
   if (d.reason) return d.reason;

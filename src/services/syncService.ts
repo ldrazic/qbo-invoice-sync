@@ -9,6 +9,7 @@ import {
 import { resolve, type Resolution } from "./conflictResolver.js";
 import type { InboundEvent } from "../queue/eventQueue.js";
 import type {
+  AuditAction,
   AuditRepository,
   EntityLink,
   EntityLinkRepository,
@@ -415,11 +416,24 @@ export class SyncService {
 
     // Lookup-before-create: ambiguous-write recovery.
     let external = await this.provider.findPaymentByReference(referenceCode);
-    let action: "applied" | "recovered_orphan_write" = "applied";
+    let action: AuditAction = "applied";
+    let recovered = false;
     if (external) {
       action = "recovered_orphan_write";
+      recovered = true;
     } else {
       external = await this.provider.createPayment(canonical, invoiceLink.externalId);
+    }
+
+    // The provider may store a different allocation than was requested (QBO
+    // re-applies to another open invoice, or holds the money as credit). The
+    // internal row stands — the money was received — but auditing the request
+    // instead of the result would hide a real divergence between the systems.
+    const appliedToInvoice = (external.payment?.allocations ?? [])
+      .filter((allocation) => allocation.invoiceDocNumber === invoice.docNumber)
+      .reduce((sum, allocation) => sum + allocation.amountCents, 0);
+    if (appliedToInvoice !== payment.amountCents) {
+      action = "applied_divergent";
     }
 
     await this.links.create({
@@ -442,6 +456,15 @@ export class SyncService {
         direction: "internal->external",
         amountCents: payment.amountCents,
         invoiceDocNumber: invoice.docNumber,
+        appliedAllocations: external.payment?.allocations ?? [],
+        ...(recovered ? { recovered: true } : {}),
+        ...(action === "applied_divergent"
+          ? {
+              divergence:
+                `provider applied ${appliedToInvoice} of ${payment.amountCents} cents ` +
+                `to ${invoice.docNumber}`,
+            }
+          : {}),
       },
     });
     return { kind: "ok", action };

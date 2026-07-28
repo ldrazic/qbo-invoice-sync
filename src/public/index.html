@@ -209,13 +209,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .ev .rail { display: flex; flex-direction: column; align-items: center; padding-top: 3px; }
 .ev .node { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--line); flex: none; }
 .ev .node.applied, .ev .node.linked_existing { border-color: var(--qbo); background: rgba(31,158,22,0.25); }
-.ev .node.conflict_lww { border-color: var(--amber); background: rgba(185,119,12,0.28); }
+.ev .node.conflict_lww, .ev .node.applied_divergent { border-color: var(--amber); background: rgba(185,119,12,0.28); }
 .ev .node.recovered_orphan_write { border-color: var(--signal); }
 .ev .node.failed { border-color: var(--danger); background: rgba(220,43,63,0.22); }
 .ev .body { min-width: 0; }
 .ev .act { font-family: var(--mono); font-size: 12px; }
 .ev .act .a-applied, .ev .act .a-linked_existing { color: var(--qbo); }
-.ev .act .a-conflict_lww { color: var(--amber); }
+.ev .act .a-conflict_lww, .ev .act .a-applied_divergent { color: var(--amber); }
 .ev .act .a-recovered_orphan_write { color: var(--signal); }
 .ev .act .a-failed { color: var(--danger); }
 .ev .act .a-skipped_echo, .ev .act .a-skipped_duplicate, .ev .act .a-skipped_noop, .ev .act .a-skipped_stale { color: var(--ink-faint); }

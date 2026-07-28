@@ -5,7 +5,11 @@ import type {
   ExternalPaymentState,
   ProviderWebhookEvent,
 } from "../accountingProvider.js";
-import type { CanonicalInvoice, CanonicalPayment } from "../../models/invoice.js";
+import type {
+  CanonicalInvoice,
+  CanonicalPayment,
+  PaymentAllocation,
+} from "../../models/invoice.js";
 import {
   AmbiguousWriteError,
   PermanentProviderError,
@@ -43,11 +47,18 @@ export class FakeProvider implements AccountingProvider {
   private invoices = new Map<string, StoredInvoice>();
   private payments = new Map<string, StoredPayment>();
   private failures: FailureMode[] = [];
+  private reallocations: PaymentAllocation[][] = [];
   readonly calls: string[] = [];
 
   /** Queue a failure for the next write call (FIFO). */
   failNext(mode: FailureMode): void {
     this.failures.push(mode);
+  }
+
+  /** Next createPayment stores `allocations` instead of the requested ones,
+   *  as QBO does when the target invoice has no open balance ([] = unapplied). */
+  reallocateNextPayment(allocations: PaymentAllocation[]): void {
+    this.reallocations.push(allocations);
   }
 
   private maybeFail(op: string, applyWrite?: () => void): void {
@@ -213,20 +224,26 @@ export class FakeProvider implements AccountingProvider {
   ): Promise<ExternalPaymentState> {
     this.calls.push(`createPayment:${invoiceExternalId}`);
     const externalId = randomUUID();
+    const reallocated = this.reallocations.shift();
+    const stored: CanonicalPayment = reallocated
+      ? { ...structuredClone(payment), allocations: structuredClone(reallocated) }
+      : structuredClone(payment);
     this.maybeFail("createPayment", () => {
-      this.payments.set(externalId, { externalId, syncToken: 0, payment: structuredClone(payment) });
-      const invoice = this.invoices.get(invoiceExternalId);
-      if (invoice) {
-        const balance = invoice.invoice.balanceCents - payment.amountCents;
-        invoice.invoice = {
-          ...invoice.invoice,
-          balanceCents: balance,
-          status: balance <= 0 ? "paid" : "partial",
-        };
-        invoice.syncToken += 1;
+      this.payments.set(externalId, { externalId, syncToken: 0, payment: structuredClone(stored) });
+      for (const allocation of stored.allocations) {
+        for (const invoice of this.invoices.values()) {
+          if (invoice.invoice.docNumber !== allocation.invoiceDocNumber) continue;
+          const balance = invoice.invoice.balanceCents - allocation.amountCents;
+          invoice.invoice = {
+            ...invoice.invoice,
+            balanceCents: balance,
+            status: balance <= 0 ? "paid" : "partial",
+          };
+          invoice.syncToken += 1;
+        }
       }
     });
-    return { externalId, syncToken: "0", payment: structuredClone(payment) };
+    return { externalId, syncToken: "0", payment: structuredClone(stored) };
   }
 
   /** Inject a payment as if recorded in the provider UI (e.g. multi-invoice). */

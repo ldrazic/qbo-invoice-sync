@@ -11,6 +11,7 @@ import type {
   ItemMappingRepository,
   ProviderTokenRepository,
 } from "../../models/repositories/types.js";
+import { TransientProviderError } from "../errors.js";
 import { QboAuth } from "./qboAuth.js";
 import { QboClient } from "./qboClient.js";
 import { QboMapper, type QboInvoiceJson, type QboPaymentJson } from "./qboMapper.js";
@@ -128,16 +129,10 @@ export class QboProvider implements AccountingProvider {
     const body = await this.mapper.toQboPaymentBody(payment, invoice);
     const result = await this.client.post("/payment", body);
     const qbo = result.Payment as QboPaymentJson;
-    return {
-      externalId: qbo.Id,
-      syncToken: qbo.SyncToken,
-      payment: await this.mapper.fromQboPayment(
-        qbo,
-        invoice.DocNumber
-          ? [{ invoiceDocNumber: invoice.DocNumber, amountCents: payment.amountCents }]
-          : [],
-      ),
-    };
+    // QBO need not honour the requested LinkedTxn: with no open balance on the
+    // target it re-applies the money elsewhere (or parks it as customer credit)
+    // and still returns 200. Report what it stored, never what we asked for.
+    return this.toPaymentState(qbo);
   }
 
   private async toPaymentState(qbo: QboPaymentJson): Promise<ExternalPaymentState> {
@@ -147,7 +142,15 @@ export class QboProvider implements AccountingProvider {
     for (const { txnId, amountCents } of this.mapper.linkedInvoiceAllocations(qbo)) {
       const invoiceResult = await this.client.get(`/invoice/${txnId}`);
       const docNumber = (invoiceResult?.Invoice as QboInvoiceJson | undefined)?.DocNumber;
-      if (docNumber) allocations.push({ invoiceDocNumber: docNumber, amountCents });
+      // Dropping one would leave an empty allocation list, which the pipeline
+      // reads as a genuine unapplied payment and skips permanently.
+      if (!docNumber) {
+        throw new TransientProviderError(
+          `QBO payment ${qbo.Id} line links invoice ${txnId}, but it could not be resolved ` +
+            `to a DocNumber (lookup returned ${invoiceResult ? "no DocNumber" : "null"}); retrying`,
+        );
+      }
+      allocations.push({ invoiceDocNumber: docNumber, amountCents });
     }
     return {
       externalId: qbo.Id,

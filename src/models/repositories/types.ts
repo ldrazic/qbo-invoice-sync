@@ -42,6 +42,9 @@ export interface EntityLinkRepository {
 
 export type AuditAction =
   | "applied"
+  /** Write succeeded, but the provider stored something other than what was
+   *  requested (QBO auto-applying customer credit elsewhere). */
+  | "applied_divergent"
   | "skipped_echo"
   | "skipped_stale"
   | "skipped_duplicate"

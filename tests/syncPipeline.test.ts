@@ -393,6 +393,57 @@ describe("payments", () => {
     expect(stack.provider.calls.filter((c) => c.startsWith("createPayment")).length).toBe(1);
   });
 
+  it("audits what the provider stored, not what was requested, when it reallocates", async () => {
+    const stack = buildStack();
+    const { invoice } = await syncedInvoice(stack);
+
+    // QBO behaviour: the target invoice has no open balance left (an
+    // auto-applied customer credit got there first), so the money is accepted
+    // but parked as credit instead of landing on the invoice we asked for.
+    stack.provider.reallocateNextPayment([]);
+
+    const { invoice: updated, paymentId } = await stack.invoices.addPayment(invoice.id, {
+      amountCents: 4_000,
+    });
+    await stack.queue.publish(internalEvent(updated, "create", "payment", paymentId));
+    await processQueue(stack);
+
+    const entry = (await stack.audit.list()).find((a) => a.entityType === "payment");
+    expect(entry?.action).toBe("applied_divergent");
+    const detail = entry?.detail as { appliedAllocations: unknown[]; divergence: string };
+    expect(detail.appliedAllocations).toEqual([]);
+    expect(detail.divergence).toContain("0 of 4000 cents");
+
+    // The payment is still linked and still recorded internally — the money
+    // was received; only its provider-side placement diverged.
+    expect((await stack.invoices.get(invoice.id))!.payments).toHaveLength(1);
+
+    // Replay-safety: a redelivered event must not create a second payment.
+    await stack.queue.publish({
+      ...internalEvent(updated, "create", "payment", paymentId),
+      dedupeKey: `internal:payment:${paymentId}:create:redelivery`,
+    });
+    await processQueue(stack);
+    expect(stack.provider.calls.filter((c) => c.startsWith("createPayment")).length).toBe(1);
+  });
+
+  it("audits an exact provider allocation as a plain applied", async () => {
+    const stack = buildStack();
+    const { invoice } = await syncedInvoice(stack);
+
+    const { invoice: updated, paymentId } = await stack.invoices.addPayment(invoice.id, {
+      amountCents: 4_000,
+    });
+    await stack.queue.publish(internalEvent(updated, "create", "payment", paymentId));
+    await processQueue(stack);
+
+    const entry = (await stack.audit.list()).find((a) => a.entityType === "payment");
+    expect(entry?.action).toBe("applied");
+    expect((entry?.detail as { appliedAllocations: unknown[] }).appliedAllocations).toEqual([
+      { invoiceDocNumber: invoice.docNumber, amountCents: 4_000 },
+    ]);
+  });
+
   it("applies a provider payment internally and derives paid status", async () => {
     const stack = buildStack();
     const { invoice, externalId } = await syncedInvoice(stack);
