@@ -14,7 +14,20 @@
     "seed": "tsx src/models/db/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "bash scripts/deploy.sh push",
+    "deploy:dry": "bash scripts/deploy.sh push --dry-run",
+    "deploy:status": "bash scripts/deploy.sh status",
+    "deploy:logs": "bash scripts/deploy.sh logs",
+    "deploy:restart": "bash scripts/deploy.sh restart",
+    "deploy:seed": "bash scripts/deploy.sh seed",
+    "deploy:ssh": "bash scripts/deploy.sh ssh",
+    "deploy:exec": "bash scripts/deploy.sh exec --",
+    "deploy:script": "bash scripts/deploy.sh script --",
+    "deploy:health": "bash scripts/deploy.sh health",
+    "webhook:fake": "bash scripts/fake-webhook.sh",
+    "deploy:env:pull": "bash scripts/deploy.sh env:pull",
+    "deploy:env:push": "bash scripts/deploy.sh env:push"
   },
   "dependencies": {
     "fastify": "^5.2.0",

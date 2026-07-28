@@ -1,6 +1,14 @@
 # Automatic HTTPS: Caddy obtains and renews a Let's Encrypt certificate for
 # PUBLIC_HOST (a sslip.io name resolving to this VM's IP — no DNS needed).
 {$PUBLIC_HOST} {
+	# Webhook deliveries go to the switch (deploy/webhook-switch) instead of
+	# straight to the app: it forwards them verbatim to the app, to a tunnel
+	# pointing at a dev machine, or both — flipped at runtime from /_switch, so
+	# the endpoint URL registered with Intuit never changes. Everything else
+	# (UI, /internal/*, /admin/*, /qbo/*) still goes to the app.
+	@switch path /webhooks/* /_switch /_switch/*
+	reverse_proxy @switch webhook-switch:8080
+
 	reverse_proxy app:3000
 
 	# Generate the hash with:  docker run --rm caddy:2-alpine caddy hash-password --plaintext 'yourpass'

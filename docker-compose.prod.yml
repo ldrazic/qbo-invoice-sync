@@ -28,6 +28,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Sits in front of /webhooks/* so the URL registered with Intuit never has to
+  # change while deliveries are re-pointed at a laptop tunnel. Dependency-free,
+  # so a stock node image with the source bind-mounted is the whole deployment:
+  # editing deploy/webhook-switch + `restart webhook-switch` is the update path.
+  webhook-switch:
+    image: node:22-alpine
+    command: node /srv/server.mjs
+    env_file: .env
+    environment:
+      SWITCH_PORT: "8080"
+      SWITCH_APP_URL: http://app:3000
+      SWITCH_STATE_FILE: /data/switch-state.json
+    volumes:
+      - ./deploy/webhook-switch:/srv:ro
+      - switch_state:/data
+    depends_on:
+      - app
+    restart: unless-stopped
+
   caddy:
     image: caddy:2-alpine
     ports:
@@ -41,9 +60,11 @@ services:
       - caddy_config:/config
     depends_on:
       - app
+      - webhook-switch
     restart: unless-stopped
 
 volumes:
   pgdata_prod:
   caddy_data:
   caddy_config:
+  switch_state:

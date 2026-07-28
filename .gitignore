@@ -4,3 +4,12 @@ dist/
 *.log
 .DS_Store
 .claude/
+
+# Deploy target (droplet IP / public host) — this repo is public.
+.deploy.env
+# Local mirror of the VM's .env, written by `scripts/deploy.sh env:pull`.
+.env.vm
+.env.bak.*
+
+# Throwaway diagnostics — run against a live deployment, not part of the app.
+scripts/debug-*.ts
